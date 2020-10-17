@@ -1,6 +1,6 @@
 {
-  "name": "import-html-entry",
-  "version": "1.6.0",
+  "name": "@cool-front/import-html-entry",
+  "version": "1.9.3",
   "description": "import html and get the exports of entry",
   "main": "./lib/index.js",
   "module": "./esm/index.js",
@@ -26,22 +26,22 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kuitos/import-html-entry.git"
+    "url": "git+https://github.com/limodou/import-html-entry.git"
   },
   "keywords": [
     "html",
     "importer"
   ],
-  "author": "Kuitos",
+  "author": "limodou",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/kuitos/import-html-entry/issues"
+    "url": "https://github.com/limodou/import-html-entry/issues"
   },
-  "homepage": "https://github.com/kuitos/import-html-entry#readme",
+  "homepage": "https://github.com/limodou/import-html-entry#readme",
   "browserslist": [
     "> 1%",
     "last 6 versions",
-    "not ie <= 8"
+    "IE > 10"
   ],
   "devDependencies": {
     "@babel/cli": "^7.2.3",
