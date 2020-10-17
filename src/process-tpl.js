@@ -4,6 +4,7 @@
  * @since 2018-09-03 15:04
  */
 import { getInlineCode, isModuleScriptSupported } from './utils';
+import urlParse from 'url'
 
 const ALL_SCRIPT_REGEX = /(<script[\s\S]*?>)[\s\S]*?<\/script>/gi;
 const SCRIPT_TAG_REGEX = /<(script)\s+((?!type=('|')text\/ng-template\3).)*?>.*?<\/\1>/is;
@@ -30,7 +31,8 @@ function hasProtocol(url) {
 }
 
 function getEntirePath(path, baseURI) {
-	return new URL(path, baseURI).toString();
+	return urlParse.resolve(baseURI, path)
+	// return new URL(path, baseURI).toString();
 }
 
 function isValidJavaScriptType(type) {
