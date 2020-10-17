@@ -17,12 +17,15 @@ interface IImportResult {
 
 export type ImportEntryOpts = {
 	fetch?: typeof window.fetch;
-	getPublicPath?: (rawPublicPath: string) => string;
+	getPublicPath?: (entry: Entry) => string;
 	getTemplate?: (tpl: string) => string;
 }
 
 type ExecScriptsOpts = Pick<ImportEntryOpts, 'fetch'> & {
 	strictGlobal?: boolean;
+	success?: CallableFunction;
+	error?: CallableFunction;
+	beforeExec?: CallableFunction;
 }
 
 export type Entry = string | { styles?: string[], scripts?: string[], html?: string };

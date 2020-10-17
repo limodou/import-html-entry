@@ -81,10 +81,13 @@ export function getInlineCode(match) {
 	return match.substring(start, end);
 }
 
-export function defaultGetPublicPath(url) {
+export function defaultGetPublicPath(entry) {
+	if(typeof entry === 'object'){
+		return '/'
+	}
 	try {
 		// URL 构造函数不支持使用 // 前缀的 url
-		const { origin, pathname } = new URL(url.startsWith('//') ? `${location.protocol}${url}` : url, location.href);
+		const { origin, pathname } = new URL(entry.startsWith('//') ? `${location.protocol}${entry}` : entry, location.href);
 		const paths = pathname.split('/');
 		// 移除最后一个元素
 		paths.pop();
@@ -93,6 +96,12 @@ export function defaultGetPublicPath(url) {
 		console.warn(e);
 		return '';
 	}
+}
+
+// Detect whether browser supports `<script type=module>` or not
+export function isModuleScriptSupported() {
+	const s = document.createElement('script');
+	return 'noModule' in s;
 }
 
 // RIC and shim for browsers setTimeout() without it

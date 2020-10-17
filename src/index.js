@@ -4,7 +4,7 @@
  * @since 2018-08-15 11:37
  */
 
-import processTpl, { genLinkReplaceSymbol } from './process-tpl';
+import processTpl, { genLinkReplaceSymbol, genScriptReplaceSymbol } from './process-tpl';
 import { defaultGetPublicPath, getGlobalProp, getInlineCode, noteGlobalProps, requestIdleCallback } from './utils';
 
 const styleCache = {};
@@ -40,23 +40,30 @@ function getEmbedHTML(template, styles, opts = {}) {
 		});
 }
 
-function getExecutableScript(scriptText, proxy, strictGlobal) {
-	window.proxy = proxy;
+const isInlineCode = code => code.startsWith('<');
+
+function getExecutableScript(scriptSrc, scriptText, proxy, strictGlobal) {
+	const sourceUrl = isInlineCode(scriptSrc) ? '' : `//# sourceURL=${scriptSrc}\n`;
+
+	// 通过这种方式获取全局 window，因为 script 也是在全局作用域下运行的，所以我们通过 window.proxy 绑定时也必须确保绑定到全局 window 上
+	// 否则在嵌套场景下， window.proxy 设置的是内层应用的 window，而代码其实是在全局作用域运行的，会导致闭包里的 window.proxy 取的是最外层的微应用的 proxy
+	const globalWindow = (0, eval)('window');
+	globalWindow.proxy = proxy;
 	// TODO 通过 strictGlobal 方式切换切换 with 闭包，待 with 方式坑趟平后再合并
 	return strictGlobal
-		? `;(function(window, self){with(window){;${scriptText}\n}}).bind(window.proxy)(window.proxy, window.proxy);`
-		: `;(function(window, self){;${scriptText}\n}).bind(window.proxy)(window.proxy, window.proxy);`;
+		? `;(function(window, self){with(window){;${scriptText}\n${sourceUrl}}}).bind(window.proxy)(window.proxy, window.proxy);`
+		: `;(function(window, self){;${scriptText}\n${sourceUrl}}).bind(window.proxy)(window.proxy, window.proxy);`;
 }
 
 // for prefetch
 export function getExternalStyleSheets(styles, fetch = defaultFetch) {
 	return Promise.all(styles.map(styleLink => {
-		if (styleLink.startsWith('<')) {
-			// if it is inline style
-			return getInlineCode(styleLink);
-		} else {
-			// external styles
-			return styleCache[styleLink] ||
+			if (isInlineCode(styleLink)) {
+				// if it is inline style
+				return getInlineCode(styleLink);
+			} else {
+				// external styles
+				return styleCache[styleLink] ||
 					(styleCache[styleLink] = fetch(styleLink).then(response => response.text()));
 			}
 
@@ -65,15 +72,25 @@ export function getExternalStyleSheets(styles, fetch = defaultFetch) {
 }
 
 // for prefetch
-export function getExternalScripts(scripts, fetch = defaultFetch) {
+export function getExternalScripts(scripts, fetch = defaultFetch, errorCallback = () => {
+}) {
 
 	const fetchScript = scriptUrl => scriptCache[scriptUrl] ||
-		(scriptCache[scriptUrl] = fetch(scriptUrl).then(response => response.text()));
+		(scriptCache[scriptUrl] = fetch(scriptUrl).then(response => {
+			// usually browser treats 4xx and 5xx response of script loading as an error and will fire a script error event
+			// https://stackoverflow.com/questions/5625420/what-http-headers-responses-trigger-the-onerror-handler-on-a-script-tag/5625603
+			if (response.status >= 400) {
+				errorCallback();
+				throw new Error(`${scriptUrl} load failed with status ${response.status}`);
+			}
+
+			return response.text();
+		}));
 
 	return Promise.all(scripts.map(script => {
 
 			if (typeof script === 'string') {
-				if (script.startsWith('<')) {
+				if (isInlineCode(script)) {
 					// if it is inline script
 					return getInlineCode(script);
 				} else {
@@ -85,6 +102,7 @@ export function getExternalScripts(scripts, fetch = defaultFetch) {
 				const { src, async } = script;
 				if (async) {
 					return {
+						src,
 						async: true,
 						content: new Promise((resolve, reject) => requestIdleCallback(() => fetchScript(src).then(resolve, reject))),
 					};
@@ -96,6 +114,13 @@ export function getExternalScripts(scripts, fetch = defaultFetch) {
 	));
 }
 
+function throwNonBlockingError(error, msg) {
+	setTimeout(() => {
+		console.error(msg);
+		throw error;
+	});
+}
+
 const supportsUserTiming =
 	typeof performance !== 'undefined' &&
 	typeof performance.mark === 'function' &&
@@ -103,13 +128,28 @@ const supportsUserTiming =
 	typeof performance.measure === 'function' &&
 	typeof performance.clearMeasures === 'function';
 
+/**
+ * FIXME to consistent with browser behavior, we should only provide callback way to invoke success and error event
+ * @param entry
+ * @param scripts
+ * @param proxy
+ * @param opts
+ * @returns {Promise<unknown>}
+ */
 export function execScripts(entry, scripts, proxy = window, opts = {}) {
-	const { fetch = defaultFetch, strictGlobal = false } = opts;
+	const {
+		fetch = defaultFetch, strictGlobal = false, success, error = () => {
+		}, beforeExec = () => {
+		},
+	} = opts;
 
-	return getExternalScripts(scripts, fetch)
+	return getExternalScripts(scripts, fetch, error)
 		.then(scriptsText => {
 
-			const geval = eval;
+			const geval = (code) => {
+				beforeExec();
+				(0, eval)(code);
+			};
 
 			function exec(scriptSrc, inlineScript, resolve) {
 
@@ -125,32 +165,29 @@ export function execScripts(entry, scripts, proxy = window, opts = {}) {
 
 					try {
 						// bind window.proxy to change `this` reference in script
-						geval(getExecutableScript(inlineScript, proxy, strictGlobal));
+						geval(getExecutableScript(scriptSrc, inlineScript, proxy, strictGlobal));
+						const exports = proxy[getGlobalProp(strictGlobal ? proxy : window)] || {};
+						resolve(exports);
 					} catch (e) {
-						console.error(`error occurs while executing the entry ${scriptSrc}`);
+						// entry error must be thrown to make the promise settled
+						console.error(`[import-html-entry]: error occurs while executing entry script ${scriptSrc}`);
 						throw e;
 					}
-
-					const exports = proxy[getGlobalProp(strictGlobal ? proxy : window)] || {};
-					resolve(exports);
-
 				} else {
-
 					if (typeof inlineScript === 'string') {
 						try {
 							// bind window.proxy to change `this` reference in script
-							geval(getExecutableScript(inlineScript, proxy, strictGlobal));
+							geval(getExecutableScript(scriptSrc, inlineScript, proxy, strictGlobal));
 						} catch (e) {
-							console.error(`error occurs while executing ${scriptSrc}`);
-							throw e;
+							// consistent with browser behavior, any independent script evaluation error should not block the others
+							throwNonBlockingError(e, `[import-html-entry]: error occurs while executing normal script ${scriptSrc}`);
 						}
 					} else {
 						// external script marked with async
 						inlineScript.async && inlineScript?.content
-							.then(downloadedScriptText => geval(getExecutableScript(downloadedScriptText, proxy)))
+							.then(downloadedScriptText => geval(getExecutableScript(inlineScript.src, downloadedScriptText, proxy, strictGlobal)))
 							.catch(e => {
-								console.error(`error occurs while executing async script ${scriptSrc?.src}`);
-								throw e;
+								throwNonBlockingError(e, `[import-html-entry]: error occurs while executing async script ${inlineScript.src}`);
 							});
 					}
 				}
@@ -178,7 +215,7 @@ export function execScripts(entry, scripts, proxy = window, opts = {}) {
 				}
 			}
 
-			return new Promise(resolve => schedule(0, resolve));
+			return new Promise(resolve => schedule(0, success || resolve));
 		});
 }
 
@@ -216,7 +253,7 @@ export default function importHTML(url, opts = {}) {
 				},
 			}));
 		}));
-};
+}
 
 export function importEntry(entry, opts = {}) {
 	const { fetch = defaultFetch, getTemplate = defaultGetTemplate } = opts;
@@ -235,10 +272,12 @@ export function importEntry(entry, opts = {}) {
 	if (Array.isArray(entry.scripts) || Array.isArray(entry.styles)) {
 
 		const { scripts = [], styles = [], html = '' } = entry;
+		const setStylePlaceholder2HTML = tpl => styles.reduceRight((html, styleSrc) => `${genLinkReplaceSymbol(styleSrc)}${html}`, tpl);
+		const setScriptPlaceholder2HTML = tpl => scripts.reduce((html, scriptSrc) => `${html}${genScriptReplaceSymbol(scriptSrc)}`, tpl);
 
-		return getEmbedHTML(getTemplate(html), styles, { fetch }).then(embedHTML => ({
+		return getEmbedHTML(getTemplate(setScriptPlaceholder2HTML(setStylePlaceholder2HTML(html))), styles, { fetch }).then(embedHTML => ({
 			template: embedHTML,
-			assetPublicPath: getPublicPath('/'),
+			assetPublicPath: getPublicPath(entry),
 			getExternalScripts: () => getExternalScripts(scripts, fetch),
 			getExternalStyleSheets: () => getExternalStyleSheets(styles, fetch),
 			execScripts: (proxy, strictGlobal) => {
