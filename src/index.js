@@ -161,12 +161,12 @@ export function execScripts(entry, scripts, proxy = window, opts = {}) {
 				}
 
 				if (scriptSrc === entry) {
-					noteGlobalProps(strictGlobal ? proxy : window);
+					let props = noteGlobalProps(strictGlobal ? proxy : window);
 
 					try {
 						// bind window.proxy to change `this` reference in script
 						geval(getExecutableScript(scriptSrc, inlineScript, proxy, strictGlobal));
-						const exports = proxy[getGlobalProp(strictGlobal ? proxy : window)] || {};
+						const exports = proxy[getGlobalProp(strictGlobal ? proxy : window, props)] || {};
 						resolve(exports);
 					} catch (e) {
 						// entry error must be thrown to make the promise settled
